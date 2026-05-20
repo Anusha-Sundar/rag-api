@@ -28,7 +28,7 @@ jobs:
             --platform linux/amd64 \
             -t ragapiregistry.azurecr.io/rag-api:latest \
             --push \
-            ./ai_engineer_journey/week9/rag_api
+            .
 
       - name: Deploy to Container Apps
         run: |
