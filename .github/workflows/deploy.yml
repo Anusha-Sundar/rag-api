@@ -1,0 +1,38 @@
+name: Build and Deploy RAG API
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: |
+          az acr login --name ragapiregistry
+
+      - name: Build and push image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            -t ragapiregistry.azurecr.io/rag-api:latest \
+            --push \
+            ./ai_engineer_journey/week9/rag_api
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name rag-api \
+            --resource-group rag-api-rg \
+            --image ragapiregistry.azurecr.io/rag-api:latest

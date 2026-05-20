@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git
+.gitignore
+chroma_pdf_db/
+uploads/
+*.pdf
+venv/
+.venv/
