@@ -15,6 +15,7 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 DEFAULT_PDF_PATH = os.getenv("PDF_PATH", "./data/AI_Technical_Corpus_v1.pdf")
 TEMPERATURE = int(os.getenv("TEMPERATURE", "0"))
+TTL = int(os.getenv("TTL", "3600"))
 
 def get_logger(name: str) -> logging.Logger:
     logging.basicConfig(

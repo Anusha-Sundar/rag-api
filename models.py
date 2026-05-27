@@ -31,3 +31,7 @@ class HealthResponse(BaseModel):
 class ErrorResponse(BaseModel):
     details:str
     error_type:str | None = None
+
+class CacheStatsResponse(BaseModel):
+    total_cached: int
+    keys: list[str]
