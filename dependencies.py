@@ -1,6 +1,7 @@
 import redis
 from fastapi import Depends,status,HTTPException,Request
 from config import get_logger
+from slowapi.util import get_remote_address
 
 logger = get_logger(__name__)
 
@@ -35,3 +36,9 @@ class PaginationParams:
         self.page = page
         self.limit =limit
     
+    
+def get_real_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return get_remote_address(request)

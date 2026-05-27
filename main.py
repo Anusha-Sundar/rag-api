@@ -9,9 +9,8 @@ from cache import get_redis_client,get_cached,set_cached,get_cache_stats
 import redis
 import time
 from slowapi import Limiter,_rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from dependencies import get_rag_chain,get_redis,get_redis_strict,PaginationParams
+from dependencies import get_rag_chain,get_redis,get_redis_strict,PaginationParams,get_real_ip
 from typing import Annotated
 logger = get_logger(__name__)
 rag_chain =None
@@ -45,7 +44,7 @@ async def lifespan(app: FastAPI):
     yield
     
 app = FastAPI(title=APP_TITLE,version=APP_VERSION,lifespan=lifespan) 
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_real_ip) 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded,_rate_limit_exceeded_handler)
 

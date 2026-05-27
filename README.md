@@ -200,3 +200,25 @@ rag-api/
 | TOP_K | No | Number of chunks to retrieve (default: 3) |
 | CHUNK_SIZE | No | Document chunk size (default: 500) |
 | CHUNK_OVERLAP | No | Chunk overlap (default: 50) |
+
+## Production Features
+
+| Feature | Implementation | Detail |
+|---|---|---|
+| RAG Pipeline | LangChain LCEL + ChromaDB | Grounded answers with source citations |
+| Caching | Redis | 82x faster on repeated questions (local) |
+| Rate Limiting | slowapi | 10/min on /ask, X-Forwarded-For aware |
+| Error Handling | FastAPI exception handlers | 400, 422, 429, 503, 500 all covered |
+| Dependency Injection | FastAPI Depends | Testable, swappable, clean separation |
+| Graceful Degradation | Redis optional | API serves requests without cache if Redis unavailable |
+| CI/CD | GitHub Actions | Push to main → build → deploy to Azure automatically |
+
+## Rate Limiting
+
+| Endpoint | Limit |
+|---|---|
+| POST /ask | 10/minute |
+| GET /health | 60/minute |
+| GET /documents | 30/minute |
+| GET /cache/stats | 5/minute |
+| DELETE /cache/clear | 5/minute |
