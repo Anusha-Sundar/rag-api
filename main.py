@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from rag import ensure_index_exists,load_chat_model,load_embedding_model,rag_chain_method
 from contextlib import asynccontextmanager
-from models import AskRequest,SourceDocument,AskResponse,HealthResponse,CacheStatsResponse
+from models import AskRequest,SourceDocument,AskResponse,HealthResponse,CacheStatsResponse,ChatRequest,ChatResponse
 from cache import get_redis_client,get_cached,set_cached,get_cache_stats
 import redis
 import time
@@ -12,6 +12,8 @@ from slowapi import Limiter,_rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from dependencies import get_rag_chain,get_redis,get_redis_strict,PaginationParams,get_real_ip
 from typing import Annotated
+from langchain_classic.memory import ConversationBufferMemory
+import uuid
 logger = get_logger(__name__)
 rag_chain =None
 retriever =None
@@ -20,6 +22,8 @@ redis_client = None
 RagChain = Annotated[any,Depends(get_rag_chain)]
 RedisClientStrict= Annotated[redis.Redis, Depends(get_redis_strict)]
 RedisClient= Annotated[redis.Redis | None, Depends(get_redis)]
+
+chat_session :dict[str,ConversationBufferMemory]={}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -175,3 +179,55 @@ async def list_documents(request: Request,pagination=Depends(PaginationParams)) 
         "limit": pagination.limit,
         "message": "Document listing endpoint — pagination working"
     }
+    
+@app.post("/chat",response_model=ChatResponse)
+@limiter.limit("20/minute")
+async def chat(request: Request, req: ChatRequest, chain=Depends(get_rag_chain))-> ChatResponse:
+    session_id = req.session_id or str(uuid.uuid4())
+    if session_id not in chat_session:
+        chat_session[session_id]=ConversationBufferMemory(
+            return_messages = True,
+            memory_key="history"
+        )
+    memory = chat_session[session_id]
+    history = memory.load_memory_variables({})["history"]
+    logger.info(f"Session id : {session_id[:8]}... - {len(history)} messages in history")
+    
+    history_text = ""
+    for msg in history:
+        if hasattr(msg, "type"):
+            if msg.type == "human":
+                history_text += f"Human: {msg.content}\n"
+            elif msg.type == "ai":
+                history_text += f"Assistant: {msg.content}\n"
+
+    full_question = f"{history_text}Human: {req.question}" if history_text else req.question
+
+    if not req.question.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question cannot be empty")
+    try:
+        result = await chain.ainvoke(full_question)
+        answer = result.get("answer","")
+        source_docs = result.get("sources",[])
+    except Exception as e:
+        logger.error(f"Chain failed : {type(e).__name__} : {e}")
+        raise HTTPException(
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail = "RAG System not avialable temporary glitch"
+        )
+    memory.save_context(
+        {"input":req.question},
+        {"output":answer}
+    )
+    sources = [SourceDocument(
+        source = src.metadata.get("source","unknown"),
+        content_preview = src.page_content[:100]
+    )
+    for src in source_docs
+    ]
+    return ChatResponse(
+        question= req.question,
+        answer= answer,
+        session_id =session_id,
+        sources = sources
+    )

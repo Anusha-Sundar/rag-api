@@ -35,3 +35,17 @@ class ErrorResponse(BaseModel):
 class CacheStatsResponse(BaseModel):
     total_cached: int
     keys: list[str]
+    
+class ChatRequest(BaseModel):
+    question : str = Field(
+        ...,
+        max_length=500,
+        min_length=3
+    )
+    session_id :str | None = None
+    
+class ChatResponse(BaseModel):
+    question: str
+    answer : str
+    session_id : str
+    sources : list[SourceDocument]=[]
