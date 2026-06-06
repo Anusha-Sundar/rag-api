@@ -12,43 +12,30 @@ A production-grade Retrieval Augmented Generation API built with LangChain, Chro
 
 ## Architecture
 
-```
-┌─────────────┐     POST /ask      ┌─────────────────┐
-│   Client    │ ─────────────────► │   FastAPI App   │
-│ (curl/UI)   │                    │  (Container App) │
-└─────────────┘                    └────────┬────────┘
-                                            │
-                              ┌─────────────▼─────────────┐
-                              │        RAG Pipeline        │
-                              │                            │
-                              │  1. Embed question         │
-                              │     (all-MiniLM-L6-v2)    │
-                              │                            │
-                              │  2. Vector search          │
-                              │     (ChromaDB)             │
-                              │                            │
-                              │  3. Build prompt           │
-                              │     (LangChain LCEL)       │
-                              │                            │
-                              │  4. Generate answer        │
-                              │     (Groq LLaMA 3.1)      │
-                              └─────────────┬─────────────┘
-                                            │
-                                            ▼
-                              ┌─────────────────────────┐
-                              │  Answer + Source Docs    │
-                              └─────────────────────────┘
+### RAG Pipeline
 
-CI/CD Pipeline:
-┌──────────┐    git push    ┌─────────────────┐    build + push    ┌─────────┐
-│ Your Mac │ ─────────────► │ GitHub Actions  │ ─────────────────► │   ACR   │
-└──────────┘                │  (Ubuntu VM)    │                    └────┬────┘
-                            └─────────────────┘                         │
-                                                                         │ pull
-                                                                    ┌────▼────────────┐
-                                                                    │ Azure Container │
-                                                                    │      Apps       │
-                                                                    └─────────────────┘
+```mermaid
+graph LR
+    Client["Client (curl/UI)"] -- "POST /ask" --> FastAPI["FastAPI App (Container App)"]
+    FastAPI --> RAG
+    RAG --> Output["Answer + Source Docs"]
+
+    subgraph RAG ["RAG Pipeline"]
+        direction TB
+        Step1["1. Embed question (all-MiniLM-L6-v2)"] -->
+        Step2["2. Vector search (ChromaDB)"] -->
+        Step3["3. Build prompt (LangChain LCEL)"] -->
+        Step4["4. Generate answer (Groq LLaMA 3.1)"]
+    end
+```
+
+### CI/CD Pipeline
+
+```mermaid
+graph LR
+    Mac["Local Machine"] -- "git push" --> GH["GitHub Actions (Ubuntu VM)"]
+    GH -- "build + push" --> ACR["Azure Container Registry"]
+    ACR -- "pull" --> ACA["Azure Container Apps"]
 ```
 
 ## Tech Stack
@@ -67,11 +54,15 @@ CI/CD Pipeline:
 
 ## API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/health` | Service status and document count |
-| POST | `/ask` | Ask a question, get grounded answer with sources |
-| GET | `/docs` | Interactive Swagger UI |
+| Method | Path | Rate Limit | Description |
+|---|---|---|---|
+| GET | `/health` | 60/min | Service status and document count |
+| POST | `/ask` | 10/min | Ask a question, get grounded answer with sources |
+| POST | `/chat` | 20/min | Conversational RAG with session memory |
+| GET | `/documents` | 30/min | List documents with pagination |
+| GET | `/cache/stats` | 5/min | Redis cache statistics |
+| DELETE | `/cache/clear` | 5/min | Clear Redis cache |
+| GET | `/docs` | — | Interactive Swagger UI |
 
 ### Request Schema — POST /ask
 
@@ -89,21 +80,43 @@ CI/CD Pipeline:
 | top_k | int | No | 3 | 1 to 10 |
 | category | string | No | null | metadata filter |
 
-### Response Schema
+### Request Schema — POST /chat (Conversational with Memory)
+
+First message — omit `session_id`, server creates a new session:
 
 ```json
 {
-  "question": "What is RAG?",
-  "answer": "RAG stands for Retrieval-Augmented Generation...",
-  "sources": [
-    {
-      "source": "data/AI_Technical_Corpus_v1.pdf",
-      "content_preview": "RAG systems work in two phases: indexing and retrieval..."
-    }
-  ],
-  "top_k": 3
+  "question": "What is RAG?"
 }
 ```
+
+Follow-up messages — include `session_id` from previous response:
+
+```json
+{
+  "question": "How does it reduce hallucinations?",
+  "session_id": "37877839-2165-406c-9333-140c8cf87e0e"
+}
+```
+
+## Evaluation Results
+
+Evaluated using DeepEval with a Groq LLaMA judge across 5 test questions from the corpus.
+
+| Question | Latency | Faithfulness | Answer Relevancy | Hallucination | Pass |
+|---|---|---|---|---|---|
+| What is RAG and what problem does it solve? | 0.93s | 0.67 | 1.00 | 0.33 | ❌ |
+| What is the difference between keyword and semantic search? | 0.27s | 1.00 | 1.00 | 1.00 | ✅ |
+| What is fine-tuning and when would you use it? | 1.05s | 0.50 | 0.80 | 0.33 | ❌ |
+| What is the Lost in the Middle phenomenon? | 0.26s | 1.00 | 0.83 | 0.00 | ❌ |
+| What is hallucination in LLMs? | 0.76s | 0.50 | 1.00 | 0.77 | ✅ |
+| **AVERAGE** | **0.65s** | **0.73** | **0.93** | **0.49** | |
+
+**Key findings:**
+- **Answer Relevancy 0.93** — system consistently addresses what was asked
+- **Faithfulness 0.73** — primary improvement target. Some answers go slightly beyond retrieved context. Fix: tighten system prompt guardrails and improve chunk retrieval quality
+- **Average latency 0.65s** — sub-second response time in production
+- Full evaluation pipeline: [evaluation-framework](https://github.com/Anusha-Sundar/evaluation-framework)
 
 ## Example Usage
 
@@ -119,7 +132,21 @@ curl -X POST https://rag-api.happyforest-2eae1650.eastus.azurecontainerapps.io/a
   -d '{"question": "What is RAG?", "top_k": 3}'
 ```
 
-**Hallucination test — question outside the corpus:**
+**Conversational chat — first message:**
+```bash
+curl -X POST https://rag-api.happyforest-2eae1650.eastus.azurecontainerapps.io/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is RAG?"}'
+```
+
+**Conversational chat — follow up:**
+```bash
+curl -X POST https://rag-api.happyforest-2eae1650.eastus.azurecontainerapps.io/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How does it reduce hallucinations?", "session_id": "YOUR_SESSION_ID"}'
+```
+
+**Hallucination test:**
 ```bash
 curl -X POST https://rag-api.happyforest-2eae1650.eastus.azurecontainerapps.io/ask \
   -H "Content-Type: application/json" \
@@ -145,11 +172,15 @@ curl http://localhost:8000/health
 
 ## How It Works
 
-**Startup:** When the container starts, it loads the embedding model and LLM, then builds a ChromaDB vector index from the pre-loaded PDF corpus. All 12 chunks are indexed and ready before the first request arrives.
+**Startup:** When the container starts it loads the embedding model and LLM, then builds a ChromaDB vector index from the pre-loaded PDF corpus. All 12 chunks are indexed and ready before the first request arrives.
 
 **Query flow:** A question comes in via POST /ask. The embedding model converts it to a vector. ChromaDB finds the 3 most semantically similar chunks. LangChain builds a prompt with those chunks as context. Groq generates a grounded answer. The response includes the answer and the source documents used.
 
+**Conversational memory:** POST /chat maintains conversation history across turns using ConversationBufferMemory. Each session gets a unique UUID. The full conversation history is prepended to each new question so the model remembers previous exchanges.
+
 **Hallucination prevention:** The system prompt instructs the LLM to answer only from the provided context. Questions outside the corpus return "I do not have information about the query" instead of hallucinated answers.
+
+**Caching:** Redis caches answers by question hash. Repeated questions return instantly (82x faster) without calling the LLM. Cache expires after 1 hour. Gracefully disabled if Redis is unavailable.
 
 ## CI/CD Pipeline
 
@@ -159,8 +190,6 @@ Every push to `main` triggers an automated deployment:
 git push origin main
        ↓
 GitHub Actions runner starts (Ubuntu)
-       ↓
-Checks out code
        ↓
 Logs into Azure via Service Principal
        ↓
@@ -181,6 +210,8 @@ rag-api/
 ├── models.py          # Pydantic request/response models
 ├── rag.py             # RAG pipeline — load, split, embed, retrieve, generate
 ├── main.py            # FastAPI app, lifespan, endpoints, error handlers
+├── cache.py           # Redis caching — make_cache_key, get_cached, set_cached
+├── dependencies.py    # FastAPI dependencies — get_rag_chain, get_redis, PaginationParams
 ├── requirements.txt   # Python dependencies
 ├── Dockerfile         # Production container — python:3.11-slim, non-root user
 ├── .dockerignore      # Excludes .env, chroma_db, uploads from image
@@ -200,25 +231,18 @@ rag-api/
 | TOP_K | No | Number of chunks to retrieve (default: 3) |
 | CHUNK_SIZE | No | Document chunk size (default: 500) |
 | CHUNK_OVERLAP | No | Chunk overlap (default: 50) |
+| TTL | No | Redis cache TTL in seconds (default: 3600) |
 
 ## Production Features
 
 | Feature | Implementation | Detail |
 |---|---|---|
 | RAG Pipeline | LangChain LCEL + ChromaDB | Grounded answers with source citations |
-| Caching | Redis | 82x faster on repeated questions (local) |
-| Rate Limiting | slowapi | 10/min on /ask, X-Forwarded-For aware |
+| Conversational Memory | ConversationBufferMemory | Session-based history across /chat turns |
+| Caching | Redis | 82x faster on repeated questions (local dev) |
+| Rate Limiting | slowapi + X-Forwarded-For | 10/min on /ask, load-balancer aware |
 | Error Handling | FastAPI exception handlers | 400, 422, 429, 503, 500 all covered |
 | Dependency Injection | FastAPI Depends | Testable, swappable, clean separation |
 | Graceful Degradation | Redis optional | API serves requests without cache if Redis unavailable |
 | CI/CD | GitHub Actions | Push to main → build → deploy to Azure automatically |
-
-## Rate Limiting
-
-| Endpoint | Limit |
-|---|---|
-| POST /ask | 10/minute |
-| GET /health | 60/minute |
-| GET /documents | 30/minute |
-| GET /cache/stats | 5/minute |
-| DELETE /cache/clear | 5/minute |
+| Evaluation | DeepEval + LangSmith | Faithfulness 0.73, Answer Relevancy 0.93 on test set |
